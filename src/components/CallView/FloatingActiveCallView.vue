@@ -4,19 +4,14 @@
 -->
 
 <script setup lang="ts">
-import type { Conversation } from '../../types/index.ts'
-
 import { t } from '@nextcloud/l10n'
-import { computed, ref, useTemplateRef } from 'vue'
+import { useElementBounding } from '@vueuse/core'
+import { computed, ref, useTemplateRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useStore } from 'vuex'
 import NcButton from '@nextcloud/vue/components/NcButton'
 import IconArrowExpand from 'vue-material-design-icons/ArrowExpand.vue'
 import IconClose from 'vue-material-design-icons/Close.vue'
-import IconDragHorizontal from 'vue-material-design-icons/DragHorizontal.vue'
-import CallTime from '../TopBar/CallTime.vue'
 import CallView from './CallView.vue'
-import { provideCallViewToken } from '../../composables/useCallViewToken.ts'
 import { useDraggableBounded } from '../../composables/useDraggableBounded.ts'
 import BrowserStorage from '../../services/BrowserStorage.js'
 
@@ -36,27 +31,79 @@ const DEFAULT_SIZE: Size = { width: 400, height: 300 }
 const MIN_SIZE: Size = { width: 320, height: 200 }
 const SIZE_STORAGE_KEY = 'floatingActiveCallSize'
 
-const store = useStore()
+/**
+ * Which edges of the floating view a resize handle moves, per axis:
+ * -1 - the left/top edge, 1 - the right/bottom edge, 0 - none
+ */
+type ResizeDirection = { x: -1 | 0 | 1, y: -1 | 0 | 1 }
+
+// Corners go last, to be above the sides they overlap
+const RESIZE_HANDLES: Array<{ name: string } & ResizeDirection> = [
+	{ name: 'top', x: 0, y: -1 },
+	{ name: 'bottom', x: 0, y: 1 },
+	{ name: 'left', x: -1, y: 0 },
+	{ name: 'right', x: 1, y: 0 },
+	{ name: 'top-left', x: -1, y: -1 },
+	{ name: 'top-right', x: 1, y: -1 },
+	{ name: 'bottom-left', x: -1, y: 1 },
+	{ name: 'bottom-right', x: 1, y: 1 },
+]
+
 const router = useRouter()
 
-// Components in the bar (e.g. CallTime) should refer to the call, not to the opened conversation
-provideCallViewToken(() => props.token)
-
+const floatingCallBounds = useTemplateRef<HTMLDivElement>('floatingCallBounds')
 const floatingCallContainer = useTemplateRef<HTMLDivElement>('floatingCallContainer')
 const floatingCall = useTemplateRef<HTMLDivElement>('floatingCall')
-const floatingCallBar = useTemplateRef<HTMLDivElement>('floatingCallBar')
+
+// Controls keep working as usual, the rest of the floating view (incl. videos) moves it
+const NOT_DRAGGABLE_SELECTOR = 'button, a, input, textarea, select, [role="button"], .floating-active-call__resize'
+// Pointer movement, after which the drag is not considered as a click anymore
+const CLICK_DISTANCE = 4
+
+let dragStartPointer = { x: 0, y: 0 }
 
 const { isDragging, style: draggableStyle, position } = useDraggableBounded(floatingCall, floatingCallContainer, {
-	// Clamped to the top right corner of the container, below the conversation top bar
+	// Off-screen until placed in the conversation area (see below)
 	initialValue: { x: Number.MAX_SAFE_INTEGER, y: 64 },
-	handle: floatingCallBar,
+	onStart: (_, event) => {
+		if ((event.target as Element).closest(NOT_DRAGGABLE_SELECTOR)) {
+			return false
+		}
+		dragStartPointer = { x: event.clientX, y: event.clientY }
+	},
+	onEnd: (_, event) => {
+		if (Math.hypot(event.clientX - dragStartPointer.x, event.clientY - dragStartPointer.y) > CLICK_DISTANCE) {
+			preventNextClick()
+		}
+	},
 })
+
+// The floating view is rendered in the body, above the app navigation and sidebars,
+// and can be moved within the whole Talk app (but not over the header above it)
+const bounds = useElementBounding(() => floatingCallBounds.value?.closest<HTMLElement>('#content-vue') ?? floatingCallBounds.value)
+const containerStyle = computed(() => ({
+	left: bounds.left.value + 'px',
+	top: bounds.top.value + 'px',
+	width: bounds.width.value + 'px',
+	height: bounds.height.value + 'px',
+}))
 
 const size = ref<Size>(readStoredSize())
 const sizeStyle = computed(() => ({ width: size.value.width + 'px', height: size.value.height + 'px' }))
 const isResizing = ref(false)
 
-const conversation = computed<Conversation | undefined>(() => store.getters.conversation(props.token))
+// Initially placed at the top right corner of the conversation area, below its top bar
+const stopInitialPlacement = watch(() => bounds.width.value, (width) => {
+	if (!width || !floatingCallBounds.value) {
+		return
+	}
+	const area = floatingCallBounds.value.getBoundingClientRect()
+	position.value = {
+		x: Math.max(0, area.right - bounds.left.value - size.value.width),
+		y: area.top - bounds.top.value + 64,
+	}
+	stopInitialPlacement()
+}, { flush: 'post' })
 
 const expandLabel = t('spreed', 'Expand')
 const dismissLabel = t('spreed', 'Dismiss')
@@ -66,6 +113,19 @@ const dismissLabel = t('spreed', 'Dismiss')
  */
 function openCall() {
 	router.push({ name: 'conversation', params: { token: props.token } })
+}
+
+/**
+ * Prevent the click following the drag, so dropping the view on a video doesn't select it
+ */
+function preventNextClick() {
+	const preventClick = (event: MouseEvent) => {
+		event.stopPropagation()
+		event.preventDefault()
+	}
+	window.addEventListener('click', preventClick, { capture: true, once: true })
+	// The click is not fired, if the pointer was released outside of the element where it was pressed
+	setTimeout(() => window.removeEventListener('click', preventClick, { capture: true }))
 }
 
 /**
@@ -84,12 +144,12 @@ function readStoredSize(): Size {
 }
 
 /**
- * Resize the floating view by dragging one of its bottom corners, keeping it within the container
+ * Resize the floating view by dragging one of its sides or corners, keeping it within the container
  *
  * @param event pointerdown event on the resize handle
- * @param corner which bottom corner is dragged
+ * @param direction which edges are moved by the handle
  */
-function startResize(event: PointerEvent, corner: 'left' | 'right') {
+function startResize(event: PointerEvent, direction: ResizeDirection) {
 	if (!floatingCallContainer.value) {
 		return
 	}
@@ -105,20 +165,32 @@ function startResize(event: PointerEvent, corner: 'left' | 'right') {
 
 	const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), Math.max(min, max))
 
-	const onPointerMove = (moveEvent: PointerEvent) => {
-		const deltaX = moveEvent.clientX - startPointer.x
-		const deltaY = moveEvent.clientY - startPointer.y
-
-		const height = clamp(startSize.height + deltaY, MIN_SIZE.height, container.height - startPosition.y)
-		if (corner === 'right') {
-			const width = clamp(startSize.width + deltaX, MIN_SIZE.width, container.width - startPosition.x)
-			size.value = { width, height }
-		} else {
-			// The right edge stays in place, the left edge follows the pointer
-			const width = clamp(startSize.width - deltaX, MIN_SIZE.width, startPosition.x + startSize.width)
-			size.value = { width, height }
-			position.value = { x: startPosition.x + startSize.width - width, y: startPosition.y }
+	/**
+	 * Resize along one axis: the moved edge follows the pointer, the opposite edge stays in place
+	 *
+	 * @param edge which edge is moved along the axis
+	 * @param delta pointer movement along the axis
+	 * @param start start position of the view along the axis
+	 * @param length start size of the view along the axis
+	 * @param minLength minimal size along the axis
+	 * @param containerLength size of the container along the axis
+	 */
+	const resizeAxis = (edge: -1 | 0 | 1, delta: number, start: number, length: number, minLength: number, containerLength: number) => {
+		if (edge === 1) {
+			return { start, length: clamp(length + delta, minLength, containerLength - start) }
 		}
+		if (edge === -1) {
+			const newLength = clamp(length - delta, minLength, start + length)
+			return { start: start + length - newLength, length: newLength }
+		}
+		return { start, length }
+	}
+
+	const onPointerMove = (moveEvent: PointerEvent) => {
+		const x = resizeAxis(direction.x, moveEvent.clientX - startPointer.x, startPosition.x, startSize.width, MIN_SIZE.width, container.width)
+		const y = resizeAxis(direction.y, moveEvent.clientY - startPointer.y, startPosition.y, startSize.height, MIN_SIZE.height, container.height)
+		size.value = { width: x.length, height: y.length }
+		position.value = { x: x.start, y: y.start }
 	}
 
 	const onPointerUp = () => {
@@ -139,67 +211,72 @@ function startResize(event: PointerEvent, corner: 'left' | 'right') {
 </script>
 
 <template>
-	<div ref="floatingCallContainer" class="floating-active-call__container">
+	<div ref="floatingCallBounds" class="floating-active-call__bounds" />
+	<Teleport to="body">
+		<!-- Add .app-talk to use Talk styles outside of #content-vue -->
 		<div
-			ref="floatingCall"
-			class="floating-active-call"
-			:class="{ 'floating-active-call--dragging': isDragging, 'floating-active-call--resizing': isResizing }"
-			:style="[draggableStyle, sizeStyle]">
-			<div ref="floatingCallBar" class="floating-active-call__bar">
-				<span class="floating-active-call__name" :title="conversation?.displayName">
-					{{ conversation?.displayName }}
-				</span>
-				<IconDragHorizontal :size="30" />
-				<div class="floating-active-call__controls">
-					<CallTime v-if="conversation" :start="conversation.callStartTime" />
-					<NcButton
-						:title="expandLabel"
-						:aria-label="expandLabel"
-						variant="tertiary-no-background"
-						@click="openCall">
-						<template #icon>
-							<IconArrowExpand :size="20" fillColor="var(--color-primary-text)" />
-						</template>
-					</NcButton>
-					<NcButton
-						:title="dismissLabel"
-						:aria-label="dismissLabel"
-						variant="tertiary-no-background"
-						@click="emit('close')">
-						<template #icon>
-							<IconClose :size="20" fillColor="var(--color-primary-text)" />
-						</template>
-					</NcButton>
+			ref="floatingCallContainer"
+			class="floating-active-call__container app-talk"
+			:style="containerStyle">
+			<div
+				ref="floatingCall"
+				class="floating-active-call"
+				:class="{ 'floating-active-call--dragging': isDragging, 'floating-active-call--resizing': isResizing }"
+				:style="[draggableStyle, sizeStyle]">
+				<div class="floating-active-call__app">
+					<CallView :token="token" isSidebar isFloating />
+					<!-- Painted with the palette of the call, as the bottom bar -->
+					<div class="floating-active-call__actions" data-theme-dark>
+						<NcButton
+							:title="expandLabel"
+							:aria-label="expandLabel"
+							variant="tertiary"
+							@click="openCall">
+							<template #icon>
+								<IconArrowExpand :size="20" />
+							</template>
+						</NcButton>
+						<NcButton
+							:title="dismissLabel"
+							:aria-label="dismissLabel"
+							variant="tertiary"
+							@click="emit('close')">
+							<template #icon>
+								<IconClose :size="20" />
+							</template>
+						</NcButton>
+					</div>
 				</div>
+				<div
+					v-for="handle in RESIZE_HANDLES"
+					:key="handle.name"
+					class="floating-active-call__resize"
+					:class="`floating-active-call__resize--${handle.name}`"
+					aria-hidden="true"
+					@pointerdown.prevent.stop="startResize($event, handle)" />
 			</div>
-			<div class="floating-active-call__app">
-				<CallView :token="token" isSidebar />
-			</div>
-			<div
-				class="floating-active-call__resize floating-active-call__resize--left"
-				aria-hidden="true"
-				@pointerdown.prevent.stop="startResize($event, 'left')" />
-			<div
-				class="floating-active-call__resize floating-active-call__resize--right"
-				aria-hidden="true"
-				@pointerdown.prevent.stop="startResize($event, 'right')" />
 		</div>
-	</div>
+	</Teleport>
 </template>
 
 <style lang="scss" scoped>
 @use '../../assets/variables.scss' as *;
 
-.floating-active-call__container {
+.floating-active-call__bounds {
 	position: absolute;
 	inset: 0;
+	visibility: hidden;
+	pointer-events: none;
+}
+
+.floating-active-call__container {
+	position: fixed;
+	// Above the app navigation and its toggle, below modals and popovers
 	z-index: 2000;
 
 	// Make container transparent to user events
 	pointer-events: none;
 
-	& .floating-active-call__bar,
-	& .floating-active-call__bar *,
 	& .floating-active-call__app,
 	& .floating-active-call__app *,
 	& .floating-active-call__resize {
@@ -229,7 +306,7 @@ function startResize(event: PointerEvent, corner: 'left' | 'right') {
 		}
 	}
 
-	&.floating-active-call--dragging .floating-active-call__bar {
+	&.floating-active-call--dragging {
 		&,
 		& *:not(button) {
 			cursor: grabbing;
@@ -237,51 +314,17 @@ function startResize(event: PointerEvent, corner: 'left' | 'right') {
 	}
 }
 
-.floating-active-call__bar {
-	display: grid;
-	// The name shrinks first, so the controls always fit
-	grid-template-columns: minmax(0, 1fr) var(--default-clickable-area) minmax(min-content, 1fr);
-	gap: var(--default-grid-baseline);
-	align-items: center;
-
-	height: calc(var(--default-clickable-area) + var(--default-grid-baseline));
-	padding: calc(0.5 * var(--default-grid-baseline)) calc(2 * var(--default-grid-baseline));
-	border-start-start-radius: var(--border-radius-element);
-	border-start-end-radius: var(--border-radius-element);
-
-	color: var(--color-primary-text);
-	background-color: var(--color-primary);
-
-	&,
-	& *:not(button) {
-		cursor: grab;
-	}
-}
-
-.floating-active-call__name {
-	font-weight: 700;
-
-	overflow: hidden;
-	white-space: nowrap;
-	text-overflow: ellipsis;
-}
-
-.floating-active-call__controls {
-	display: flex;
-	justify-content: flex-end;
-	gap: var(--default-grid-baseline);
-}
-
 .floating-active-call__app {
 	position: relative;
 	display: flex;
+	// The floating view can be moved by its videos as well
+	cursor: grab;
 	flex-direction: column;
 	justify-content: center;
 
-	height: calc(100% - var(--default-clickable-area) - var(--default-grid-baseline));
+	height: 100%;
 	width: 100%;
-	border-end-start-radius: var(--border-radius-element);
-	border-end-end-radius: var(--border-radius-element);
+	border-radius: var(--border-radius-element);
 
 	background: $color-call-background;
 
@@ -290,23 +333,102 @@ function startResize(event: PointerEvent, corner: 'left' | 'right') {
 	isolation: isolate;
 }
 
+.floating-active-call__actions {
+	position: absolute;
+	top: calc(2 * var(--default-grid-baseline));
+	inset-inline-end: calc(2 * var(--default-grid-baseline));
+	z-index: 20;
+	display: flex;
+	gap: var(--default-grid-baseline);
+	// Only shown while the floating view is hovered or focused
+	opacity: 0;
+	transition: opacity var(--animation-quick) ease-in-out;
+
+	@media (hover: none) {
+		opacity: 1;
+	}
+
+	.floating-active-call:hover &,
+	&:focus-within {
+		opacity: 1;
+	}
+
+	// Same as the buttons of the bottom bar
+	.button-vue--tertiary {
+		background-color: var(--color-primary-light);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.floating-active-call__actions {
+		transition: none;
+	}
+}
+
 // Physical sides on purpose: the floating view is positioned with physical left/top coordinates
 /* stylelint-disable csstools/use-logical */
 .floating-active-call__resize {
+	--resize-side: calc(1.5 * var(--default-grid-baseline));
+	--resize-corner: calc(4 * var(--default-grid-baseline));
 	position: absolute;
-	bottom: 0;
 	z-index: 1;
-	width: calc(4 * var(--default-grid-baseline));
-	height: calc(4 * var(--default-grid-baseline));
 
-	&--left {
-		left: 0;
-		cursor: nesw-resize;
+	&--top,
+	&--bottom {
+		left: var(--resize-corner);
+		right: var(--resize-corner);
+		height: var(--resize-side);
+		cursor: ns-resize;
 	}
 
+	&--left,
 	&--right {
+		top: var(--resize-corner);
+		bottom: var(--resize-corner);
+		width: var(--resize-side);
+		cursor: ew-resize;
+	}
+
+	&--top-left,
+	&--top-right,
+	&--bottom-left,
+	&--bottom-right {
+		width: var(--resize-corner);
+		height: var(--resize-corner);
+	}
+
+	&--top,
+	&--top-left,
+	&--top-right {
+		top: 0;
+	}
+
+	&--bottom,
+	&--bottom-left,
+	&--bottom-right {
+		bottom: 0;
+	}
+
+	&--left,
+	&--top-left,
+	&--bottom-left {
+		left: 0;
+	}
+
+	&--right,
+	&--top-right,
+	&--bottom-right {
 		right: 0;
+	}
+
+	&--top-left,
+	&--bottom-right {
 		cursor: nwse-resize;
+	}
+
+	&--top-right,
+	&--bottom-left {
+		cursor: nesw-resize;
 	}
 }
 /* stylelint-enable csstools/use-logical */

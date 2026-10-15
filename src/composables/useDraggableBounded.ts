@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { UseDraggableOptions } from '@vueuse/core'
 import type { MaybeRefOrGetter, Ref } from 'vue'
 
 import { useDraggable, useElementSize } from '@vueuse/core'
@@ -19,6 +20,8 @@ type ElementRef = Ref<HTMLElement | null | undefined>
  * @param options initial position and optional drag handle (defaults to target)
  * @param options.initialValue initial drag position
  * @param options.handle element that starts the drag (defaults to target)
+ * @param options.onStart called when the drag starts, return false to not start it
+ * @param options.onEnd called when the drag ends
  */
 export function useDraggableBounded(
 	target: ElementRef,
@@ -26,12 +29,16 @@ export function useDraggableBounded(
 	options: {
 		initialValue?: MaybeRefOrGetter<{ x: number, y: number }>
 		handle?: MaybeRefOrGetter<HTMLElement | null | undefined>
+		onStart?: UseDraggableOptions['onStart']
+		onEnd?: UseDraggableOptions['onEnd']
 	} = {},
 ) {
 	const { position, isDragging, style } = useDraggable(target, {
 		containerElement: container,
 		initialValue: options.initialValue,
 		handle: options.handle,
+		onStart: options.onStart,
+		onEnd: options.onEnd,
 		restrictInView: true,
 	})
 
