@@ -366,6 +366,7 @@ import NewMessageChatSummary from './NewMessageChatSummary.vue'
 import NewMessageNewFileDialog from './NewMessageNewFileDialog.vue'
 import NewMessageTypingIndicator from './NewMessageTypingIndicator.vue'
 import NewMessageUploadEditor from './NewMessageUploadEditor.vue'
+import { useIsBrowsingDuringCall } from '../../composables/useActiveCall.ts'
 import { useChatMentions } from '../../composables/useChatMentions.ts'
 import { useGetThreadId } from '../../composables/useGetThreadId.ts'
 import { useTemporaryMessage } from '../../composables/useTemporaryMessage.ts'
@@ -507,6 +508,7 @@ export default {
 			settingsStore: useSettingsStore(),
 			tokenStore: useTokenStore(),
 			uploadStore: useUploadStore(),
+			isBrowsingDuringCall: useIsBrowsingDuringCall(),
 			supportTypingStatus,
 			supportScheduleMessages,
 			autoComplete,
@@ -656,7 +658,8 @@ export default {
 		},
 
 		currentConversationIsJoined() {
-			return this.tokenStore.currentConversationIsJoined
+			// While in a call, other conversations are opened without joining them, but messages can be posted there
+			return this.tokenStore.currentConversationIsJoined || this.isBrowsingDuringCall
 		},
 
 		// Whether this input has an upload staged. Upload state is global, so the
@@ -981,7 +984,7 @@ export default {
 		},
 
 		async sendTypingSignal(isTyping) {
-			if (this.currentConversationIsJoined) {
+			if (this.tokenStore.currentConversationIsJoined) {
 				await setTyping(isTyping)
 			}
 		},

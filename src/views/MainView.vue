@@ -7,21 +7,24 @@ import type { WatchStopHandle } from 'vue'
 import type { Conversation } from '../types/index.ts'
 
 import { emit } from '@nextcloud/event-bus'
-import { computed, onMounted, onUnmounted, watch, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useStore } from 'vuex'
 import CallFailedDialog from '../components/CallView/CallFailedDialog.vue'
 import CallView from '../components/CallView/CallView.vue'
+import FloatingActiveCallView from '../components/CallView/FloatingActiveCallView.vue'
 import ChatView from '../components/ChatView.vue'
 import ExternalCallView from '../components/ExternalCallView.vue'
 import LobbyScreen from '../components/LobbyScreen.vue'
 import PollViewer from '../components/PollViewer/PollViewer.vue'
 import TopBar from '../components/TopBar/TopBar.vue'
+import { useActiveCallToken, useIsBrowsingDuringCall } from '../composables/useActiveCall.ts'
 import { useIsInCall } from '../composables/useIsInCall.js'
 import { useJoinCall } from '../composables/useJoinCall.ts'
 import { watchJoinedConversation } from '../composables/useJoinedConversation.ts'
 import { CALL, CONVERSATION } from '../constants.ts'
 import { useActorStore } from '../stores/actor.ts'
+import { useCallViewStore } from '../stores/callView.ts'
 import { useSettingsStore } from '../stores/settings.ts'
 import { hasExternalCallService, isChannelConversation, isConversationPhoneRoom } from '../utils/conversation.ts'
 
@@ -31,10 +34,15 @@ const props = defineProps<{
 
 const store = useStore()
 const isInCall = useIsInCall()
+const activeCallToken = useActiveCallToken()
+const isBrowsingDuringCall = useIsBrowsingDuringCall()
+// Dismissed floating call view stays hidden until the user returns to the call (or it ends)
+const isFloatingCallDismissed = ref(false)
 const { joinCall } = useJoinCall()
 const router = useRouter()
 const route = useRoute()
 const actorStore = useActorStore()
+const callViewStore = useCallViewStore()
 const settingsStore = useSettingsStore()
 
 /** Internal handlers for 'joined-conversation' watcher (direct-call) */
@@ -66,6 +74,12 @@ watch([() => props.token, isVoiceRoom], ([newToken, newIsVoiceRoom]) => {
 		handleDirectCall(newToken)
 	}
 }, { immediate: true })
+
+watch(isBrowsingDuringCall, (value) => {
+	if (!value) {
+		isFloatingCallDismissed.value = false
+	}
+})
 
 watch(isInLobby, (isInLobby) => {
 	// User is now blocked by the lobby
@@ -100,6 +114,11 @@ onUnmounted(() => {
  */
 function handleDirectCall(routeToken: string) {
 	stopWatchingJoinedConversation()
+
+	if (store.getters.isInCall(routeToken)) {
+		// Returning to the conversation with an active call (e.g. after browsing other conversations)
+		return
+	}
 
 	const conversation = store.getters.conversation(routeToken)
 	if ([CONVERSATION.TYPE.CHANGELOG, CONVERSATION.TYPE.NOTE_TO_SELF].includes(conversation.type)
@@ -141,6 +160,11 @@ function handleDirectCall(routeToken: string) {
 			<PollViewer />
 			<CallFailedDialog v-if="connectionFailed" :token="token" />
 		</template>
+		<!-- The call continues in the background, while another conversation is opened -->
+		<FloatingActiveCallView
+			v-if="isBrowsingDuringCall && activeCallToken && !callViewStore.forceCallView && !isFloatingCallDismissed"
+			:token="activeCallToken"
+			@close="isFloatingCallDismissed = true" />
 	</div>
 </template>
 

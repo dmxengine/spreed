@@ -12,6 +12,7 @@ import { SESSION } from '../../constants.ts'
 const mocks = vi.hoisted(() => ({
 	token: { current: null },
 	isInCall: { current: null },
+	activeCallToken: { current: null },
 	joinedConversation: { current: null },
 }))
 
@@ -24,6 +25,9 @@ vi.mock('../useGetToken.ts', () => ({
 }))
 vi.mock('../useIsInCall.js', () => ({
 	useIsInCall: () => mocks.isInCall.current,
+}))
+vi.mock('../useActiveCall.ts', () => ({
+	useActiveCallToken: () => mocks.activeCallToken.current,
 }))
 vi.mock('../useJoinedConversation.ts', () => ({
 	useJoinedConversation: () => mocks.joinedConversation.current,
@@ -89,6 +93,7 @@ describe('useActiveSession', () => {
 		windowHasFocus = true
 		mocks.token.current = ref('XXTOKENXX')
 		mocks.isInCall.current = ref(false)
+		mocks.activeCallToken.current = ref(null)
 		mocks.joinedConversation.current = ref(null)
 		useStore.mockReturnValue({ dispatch: vi.fn() })
 		await mountActiveSession()
@@ -198,5 +203,52 @@ describe('useActiveSession', () => {
 
 		expect(setSessionState).toHaveBeenCalledWith('YYTOKENYY', SESSION.STATE.INACTIVE)
 		expect(useIsSessionActive().value).toBe(false)
+	})
+
+	describe('while another conversation is opened during the call', () => {
+		beforeEach(() => {
+			// The session and the call remain in the joined conversation
+			mocks.joinedConversation.current.value = 'CALLTOKEN'
+			mocks.activeCallToken.current.value = 'CALLTOKEN'
+		})
+
+		test('keeps the session in the call active', async () => {
+			blurWindow()
+
+			await runInactiveTimer()
+
+			expect(setSessionState).not.toHaveBeenCalled()
+			expect(useIsSessionActive().value).toBe(true)
+		})
+
+		test('repeats the skipped update for the opened conversation when the call ended', async () => {
+			blurWindow()
+			await runInactiveTimer()
+
+			mocks.activeCallToken.current.value = null
+			await flushPromises()
+
+			expect(setSessionState).toHaveBeenCalledWith('XXTOKENXX', SESSION.STATE.INACTIVE)
+			expect(useIsSessionActive().value).toBe(false)
+		})
+
+		test('updates and rejoins the conversation with the call, not the opened one', async () => {
+			// console.error is set up to fail the test otherwise
+			const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+			// Session was marked as inactive before joining the call
+			mocks.activeCallToken.current.value = null
+			blurWindow()
+			await runInactiveTimer()
+			mocks.activeCallToken.current.value = 'CALLTOKEN'
+			await flushPromises()
+
+			setSessionState.mockImplementationOnce(() => Promise.reject({ isAxiosError: true, response: { status: 404 } }))
+			focusWindow()
+			await flushPromises()
+
+			expect(setSessionState).toHaveBeenLastCalledWith('CALLTOKEN', SESSION.STATE.ACTIVE)
+			expect(useStore().dispatch).toHaveBeenCalledWith('joinConversation', { token: 'CALLTOKEN' })
+			consoleError.mockRestore()
+		})
 	})
 })

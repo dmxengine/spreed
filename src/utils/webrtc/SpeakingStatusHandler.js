@@ -131,7 +131,7 @@ export default class SpeakingStatusHandler {
 	#handleSpeaking(callParticipantModel, isSpeaking) {
 		// TODO consider using sessionStore.getSession(sessionId) to look up attendeeId
 		const attendeeId = this.#store.getters.findParticipant(
-			this.#tokenStore.token,
+			this.#tokenStore.lastJoinedConversationToken || this.#tokenStore.token,
 			{ sessionId: callParticipantModel.attributes.nextcloudSessionId },
 		)?.attendeeId
 

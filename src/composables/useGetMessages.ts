@@ -28,6 +28,7 @@ import { useGuestNameStore } from '../stores/guestName.ts'
 import { isAxiosErrorResponse } from '../types/guards.ts'
 import { debugTimer } from '../utils/debugTimer.ts'
 import { isFileShareMessage, tryLocalizeDeletedMessage, tryLocalizeSystemMessage } from '../utils/message.ts'
+import { useActiveCallToken } from './useActiveCall.ts'
 import { useGetThreadId } from './useGetThreadId.ts'
 import { useGetToken } from './useGetToken.ts'
 
@@ -63,6 +64,7 @@ export function useGetMessagesProvider() {
 
 	const currentToken = useGetToken()
 	const contextThreadId = useGetThreadId()
+	const activeCallToken = useActiveCallToken()
 	/** Conversation object by currentToken ref. If required in an async context, store getter should be used instead */
 	const currentConversation = computed<Conversation | undefined>(() => store.getters.conversation(currentToken.value))
 	const isInLobby = computed<boolean>(() => store.getters.isInLobby)
@@ -141,7 +143,9 @@ export function useGetMessagesProvider() {
 			}
 			if (oldToken && oldToken !== newToken) {
 				store.dispatch('cancelPollNewMessages', { requestId: oldToken })
-				chatRelaySupported = null
+				// While in a call, conversations are opened without joining them in signaling,
+				// so new messages won't be relayed via signaling and have to be polled
+				chatRelaySupported = activeCallToken.value ? false : null
 				clearInterval(fallbackPollInterval)
 			}
 

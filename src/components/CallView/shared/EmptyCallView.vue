@@ -34,7 +34,7 @@ import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import IconAccountMultipleOutline from 'vue-material-design-icons/AccountMultipleOutline.vue'
 import IconLink from 'vue-material-design-icons/Link.vue'
 import IconPhoneOutline from 'vue-material-design-icons/PhoneOutline.vue'
-import { useGetToken } from '../../../composables/useGetToken.ts'
+import { useCallViewToken } from '../../../composables/useCallViewToken.ts'
 import { CONVERSATION, PARTICIPANT } from '../../../constants.ts'
 import { isConversationPhoneRoom } from '../../../utils/conversation.ts'
 import { copyConversationLinkToClipboard } from '../../../utils/handleUrl.ts'
@@ -70,7 +70,7 @@ export default {
 
 	setup() {
 		return {
-			token: useGetToken(),
+			token: useCallViewToken(),
 		}
 	},
 

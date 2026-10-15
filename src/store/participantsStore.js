@@ -1032,12 +1032,14 @@ const actions = {
 
 		// Special handling for phone rooms, if a call was rejected
 		if (value.status === 'rejected') {
-			const conversation = context.rootGetters.conversation(tokenStore.token)
+			// The call might continue in the background, while another conversation is opened
+			const token = tokenStore.lastJoinedConversationToken || tokenStore.token
+			const conversation = context.rootGetters.conversation(token)
 
 			if (isConversationPhoneRoom(conversation)) {
 				const actorStore = useActorStore()
 				await context.dispatch('leaveCall', {
-					token: tokenStore.token,
+					token,
 					participantIdentifier: actorStore.participantIdentifier,
 					all: true,
 				})

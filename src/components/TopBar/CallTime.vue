@@ -70,8 +70,8 @@ import NcLoadingIcon from '@nextcloud/vue/components/NcLoadingIcon'
 import NcPopover from '@nextcloud/vue/components/NcPopover'
 import IconStop from 'vue-material-design-icons/Stop.vue'
 import IconScreenRecordOutline from '../../../img/material-icons/screen-record-outline.svg?raw'
+import { useCallViewToken } from '../../composables/useCallViewToken.ts'
 import { useDocumentVisibility } from '../../composables/useDocumentVisibility.ts'
-import { useGetToken } from '../../composables/useGetToken.ts'
 import { CALL } from '../../constants.ts'
 import { formattedTime } from '../../utils/formattedTime.ts'
 
@@ -102,7 +102,7 @@ export default {
 		return {
 			IconScreenRecordOutline,
 			isDocumentVisible: useDocumentVisibility(),
-			token: useGetToken(),
+			token: useCallViewToken(),
 		}
 	},
 
