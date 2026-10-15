@@ -45,8 +45,10 @@ import { useSettingsStore } from '../../stores/settings.ts'
 import { isClassifiedConversation } from '../../utils/conversation.ts'
 import { localCallParticipantModel, localMediaModel } from '../../utils/webrtc/index.js'
 
-const { isSidebar = false } = defineProps<{
+const { isSidebar = false, isFloating = false } = defineProps<{
 	isSidebar: boolean
+	/** Whether the bar is used in the floating call view: all controls are grouped in the center and shown on hover */
+	isFloating?: boolean
 }>()
 
 const store = useStore()
@@ -462,7 +464,11 @@ function setCallLayout(layout: CallLayout) {
 </script>
 
 <template>
-	<div ref="bottomBar" class="bottom-bar" data-theme-dark>
+	<div
+		ref="bottomBar"
+		class="bottom-bar"
+		:class="{ 'bottom-bar--floating': isFloating }"
+		data-theme-dark>
 		<div v-if="!isSidebar" class="bottom-bar-call-controls">
 			<!-- Fullscreen -->
 			<NcButton
@@ -712,6 +718,30 @@ function setCallLayout(layout: CallLayout) {
 
 	:deep(.button-vue--tertiary) {
 		background-color: var(--color-primary-light);
+	}
+
+	&--floating {
+		justify-content: center;
+		gap: calc(3 * var(--default-grid-baseline));
+		// Only shown while the call is hovered, focused or a menu of the bar is open
+		opacity: 0;
+		transition: opacity var(--animation-quick) ease-in-out;
+
+		@media (hover: none) {
+			opacity: 1;
+		}
+
+		#call-container:hover &,
+		&:focus-within,
+		&:has([aria-expanded='true']) {
+			opacity: 1;
+		}
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.bottom-bar--floating {
+		transition: none;
 	}
 }
 

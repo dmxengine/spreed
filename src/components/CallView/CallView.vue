@@ -150,7 +150,8 @@
 				<div
 					v-if="isSidebar && !showLocalVideo"
 					class="local-video local-video--sidebar"
-					:class="{ 'local-video--collapsed': !isSidebarLocalVideoOpen }">
+					:class="{ 'local-video--collapsed': !isSidebarLocalVideoOpen, 'local-video--floating': isFloating }"
+					data-theme-dark>
 					<LocalVideo
 						v-if="isSidebarLocalVideoOpen"
 						ref="localVideo"
@@ -173,7 +174,7 @@
 				</div>
 			</div>
 
-			<BottomBar v-if="!isRecording" :isSidebar="isSidebar" />
+			<BottomBar v-if="!isRecording" :isSidebar="isSidebar" :isFloating="isFloating" />
 		</template>
 	</div>
 </template>
@@ -254,6 +255,12 @@ export default {
 
 		// Determines whether this component is used in the recording view
 		isRecording: {
+			type: Boolean,
+			default: false,
+		},
+
+		// Determines whether this component is used in the floating view, while another conversation is opened
+		isFloating: {
 			type: Boolean,
 			default: false,
 		},
@@ -1170,6 +1177,20 @@ export default {
 	// Without the video, the toggle takes its place
 	.local-video--collapsed & {
 		position: static;
+	}
+
+	// In the floating view, all the controls are only shown on hover (instead of being dimmed)
+	.local-video--floating & {
+		opacity: 0;
+
+		@media (hover: none) {
+			opacity: 1;
+		}
+	}
+
+	#call-container:hover .local-video--floating &,
+	.local-video--floating &:focus-within {
+		opacity: 1;
 	}
 }
 
