@@ -29,10 +29,10 @@ export function canPlayAudio(mimetype) {
 }
 
 /**
- * Checks if the current conversation is a voice room.
+ * Checks if the conversation with the call is a voice room.
  */
 function isVoiceRoom() {
-	const conversation = store.getters.conversation(tokenStore.token)
+	const conversation = store.getters.conversation(tokenStore.lastJoinedConversationToken || tokenStore.token)
 	return Boolean(conversation?.attributes & CONVERSATION.ATTRIBUTE.VOICE_ROOM)
 }
 

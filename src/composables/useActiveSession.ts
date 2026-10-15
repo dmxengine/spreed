@@ -10,6 +10,7 @@ import { hasTalkFeature } from '../services/CapabilitiesManager.ts'
 import { setSessionState } from '../services/participantsService.js'
 import { useTokenStore } from '../stores/token.ts'
 import { isAxiosErrorResponse } from '../types/guards.ts'
+import { useActiveCallToken } from './useActiveCall.ts'
 import { useDocumentVisibility } from './useDocumentVisibility.ts'
 import { useGetToken } from './useGetToken.ts'
 import { useIsInCall } from './useIsInCall.js'
@@ -48,8 +49,12 @@ export function useActiveSession() {
 	const supportSessionState = computed(() => hasTalkFeature(token.value, 'session-state'))
 
 	const isInCall = useIsInCall()
+	const activeCallToken = useActiveCallToken()
 	const isDocumentVisible = useDocumentVisibility()
 	const currentJoinedConversation = useJoinedConversation()
+	// While in a call, other conversations are opened without joining them, the session stays in the call
+	const sessionToken = computed(() => activeCallToken.value ?? token.value)
+	const isInAnyCall = computed(() => isInCall.value || !!activeCallToken.value)
 
 	let inactiveTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -89,7 +94,7 @@ export function useActiveSession() {
 		}
 	})
 
-	watch(isInCall, (value) => {
+	watch(isInAnyCall, (value) => {
 		// Repeat the update which was skipped for the duration of the call
 		if (!value && !isWindowActive()) {
 			setSessionAsInactive()
@@ -138,13 +143,13 @@ export function useActiveSession() {
 		}
 
 		if (currentState.value === SESSION.STATE.ACTIVE
-			|| !token.value) {
+			|| !sessionToken.value) {
 			return
 		}
 		currentState.value = SESSION.STATE.ACTIVE
 
 		try {
-			await setSessionState(token.value, SESSION.STATE.ACTIVE)
+			await setSessionState(sessionToken.value, SESSION.STATE.ACTIVE)
 			console.info('Session has been marked as active')
 		} catch (error) {
 			console.error(error)
@@ -152,7 +157,7 @@ export function useActiveSession() {
 				// In case of 404 - participant did not have a session, block UI to join call
 				tokenStore.updateLastJoinedConversationToken('')
 				// Automatically try to join the conversation again
-				store.dispatch('joinConversation', { token: token.value })
+				store.dispatch('joinConversation', { token: sessionToken.value })
 			} else {
 				// Follow the server, which keeps notifying about new messages
 				currentState.value = SESSION.STATE.INACTIVE
@@ -168,10 +173,10 @@ export function useActiveSession() {
 			return
 		}
 		if (currentState.value === SESSION.STATE.INACTIVE
-			|| !token.value) {
+			|| !sessionToken.value) {
 			return
 		}
-		if (isInCall.value) {
+		if (isInAnyCall.value) {
 			// Sessions in a call stay active, the isInCall watcher repeats the update
 			return
 		}
@@ -180,7 +185,7 @@ export function useActiveSession() {
 		currentState.value = SESSION.STATE.INACTIVE
 
 		try {
-			await setSessionState(token.value, SESSION.STATE.INACTIVE)
+			await setSessionState(sessionToken.value, SESSION.STATE.INACTIVE)
 			console.info('Session has been marked as inactive')
 		} catch (error) {
 			console.error(error)
@@ -190,7 +195,7 @@ export function useActiveSession() {
 				// In case of 404 - participant did not have a session, block UI to join call
 				tokenStore.updateLastJoinedConversationToken('')
 				// Automatically try to join the conversation again
-				store.dispatch('joinConversation', { token: token.value })
+				store.dispatch('joinConversation', { token: sessionToken.value })
 			}
 			if (!isWindowActive()) {
 				scheduleSessionAsInactive()

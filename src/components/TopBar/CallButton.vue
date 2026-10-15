@@ -21,6 +21,7 @@ import IconChevronDown from 'vue-material-design-icons/ChevronDown.vue'
 import IconPhone from 'vue-material-design-icons/Phone.vue' // Filled used for non-silent calls
 import IconPhoneDialOutline from 'vue-material-design-icons/PhoneDialOutline.vue'
 import IconPhoneOutline from 'vue-material-design-icons/PhoneOutline.vue'
+import { useIsBrowsingDuringCall } from '../../composables/useActiveCall.ts'
 import { useGetToken } from '../../composables/useGetToken.ts'
 import { useIsInCall } from '../../composables/useIsInCall.js'
 import { useJoinCall } from '../../composables/useJoinCall.ts'
@@ -57,6 +58,7 @@ const { joinCall } = useJoinCall()
 
 const tokenStore = useTokenStore()
 const isInCall = useIsInCall()
+const isBrowsingDuringCall = useIsBrowsingDuringCall()
 const callViewStore = useCallViewStore()
 const talkHashStore = useTalkHashStore()
 const settingsStore = useSettingsStore()
@@ -97,7 +99,8 @@ const startCallButtonDisabled = computed(() => {
 		|| isInLobby.value
 		|| conversation.value.readOnly
 		|| isNextcloudTalkHashDirty.value
-		|| !tokenStore.currentConversationIsJoined
+		// While browsing during a call, the conversation is joined after leaving the active call
+		|| (!tokenStore.currentConversationIsJoined && !isBrowsingDuringCall.value)
 		|| blockCalls
 })
 const showSplitStartCallButton = computed(() => {
@@ -171,6 +174,12 @@ async function handleJoinCall(silent?: boolean) {
  * @param silent Whether to pre-set silent flag upon click, or force a silent start
  */
 function handleClick(silent?: boolean) {
+	if (isBrowsingDuringCall.value && !props.isMediaSettings) {
+		// Leave the active call in another conversation (after confirmation), then join the call here
+		router.push({ name: 'conversation', params: { token: token.value }, hash: '#direct-call' })
+		return
+	}
+
 	if (hasExternalCallService(conversation.value)) {
 		// Another service is in charge, trigger iframe rendering in MainView
 		handleExternalCall()

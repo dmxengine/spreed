@@ -18,6 +18,7 @@ import { EventBus } from '../services/EventBus.ts'
 import { useActorStore } from '../stores/actor.ts'
 import { useSessionStore } from '../stores/session.ts'
 import { isChannelConversation } from '../utils/conversation.ts'
+import { useActiveCallToken, useIsBrowsingDuringCall } from './useActiveCall.ts'
 import { useDocumentVisibility } from './useDocumentVisibility.ts'
 import { useGetToken } from './useGetToken.ts'
 import { useIsInCall } from './useIsInCall.js'
@@ -38,6 +39,8 @@ function useGetParticipantsComposable(activeTab = ref('participants')) {
 	const sessionStore = useSessionStore()
 	const store = useStore()
 	const isInCall = useIsInCall()
+	const activeCallToken = useActiveCallToken()
+	const isBrowsingDuringCall = useIsBrowsingDuringCall()
 	const isDocumentVisible = useDocumentVisibility()
 
 	const isActive = computed(() => activeTab.value === 'participants')
@@ -70,6 +73,10 @@ function useGetParticipantsComposable(activeTab = ref('participants')) {
 	 * @param payload."0" - users list
 	 */
 	function handleUsersUpdated([users]: [SignalingSessionPayload[]]) {
+		if (isBrowsingDuringCall.value) {
+			// Signaling messages are related to the conversation with the call, not the opened one
+			return
+		}
 		if (sessionStore.updateSessions(token.value, users)) {
 			throttleUpdateParticipants()
 		} else {
@@ -84,8 +91,8 @@ function useGetParticipantsComposable(activeTab = ref('participants')) {
 	 * @param payload."0" - users list
 	 */
 	async function checkCurrentUserPermissions([users]: [StandaloneSignalingUpdateSession[]]) {
-		if (!token.value || !conversation.value) {
-			// No token / conversation to associate message with (user left the room)
+		if (!token.value || !conversation.value || isBrowsingDuringCall.value) {
+			// No token / conversation to associate message with (user left the room or browses during call)
 			// TODO: should instead compare if signaling message came for the right room (need event payload change):
 			// data.event.update.roomid === token.value
 			return
@@ -116,6 +123,9 @@ function useGetParticipantsComposable(activeTab = ref('participants')) {
 	 * @param payload."0" - users list
 	 */
 	function handleUsersLeft([sessionIds]: [StandaloneSignalingLeaveSession[]]) {
+		if (isBrowsingDuringCall.value) {
+			return
+		}
 		sessionStore.updateSessionsLeft(token.value, sessionIds)
 		throttleLongUpdate()
 	}
@@ -124,6 +134,9 @@ function useGetParticipantsComposable(activeTab = ref('participants')) {
 	 * Patch participants list from signaling messages (end call for everyone)
 	 */
 	function handleUsersDisconnected() {
+		if (isBrowsingDuringCall.value) {
+			return
+		}
 		sessionStore.updateParticipantsDisconnectedFromStandaloneSignaling(token.value)
 		throttleLongUpdate()
 	}
@@ -218,6 +231,10 @@ function useGetParticipantsComposable(activeTab = ref('participants')) {
 
 	watch(token, () => {
 		cancelPendingUpdates()
+		if (activeCallToken.value) {
+			// Conversations are not joined while in a call, so there will be no 'joined-conversation' event
+			cancelableGetParticipants()
+		}
 	})
 
 	watch(isActive, (newValue) => {

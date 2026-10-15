@@ -136,3 +136,37 @@ RemoteVideoBlocker.prototype = {
 	},
 
 }
+
+/**
+ * Video blockers of the participants of the current call.
+ *
+ * The blocker has to be shared by all the views of the participant: the call view can be re-mounted during the call
+ * (e.g. when switching between the main and the floating view), and a separate blocker for each view would block
+ * the video once the old view is gone, while the new view would never unblock it again.
+ */
+const remoteVideoBlockers = new WeakMap()
+
+/**
+ * Get the video blocker of the participant, creating it if needed.
+ *
+ * @param {object} callParticipantModel the model of the participant
+ * @return {RemoteVideoBlocker}
+ */
+export function getRemoteVideoBlocker(callParticipantModel) {
+	let remoteVideoBlocker = remoteVideoBlockers.get(callParticipantModel)
+	if (!remoteVideoBlocker) {
+		remoteVideoBlocker = new RemoteVideoBlocker(callParticipantModel)
+		remoteVideoBlockers.set(callParticipantModel, remoteVideoBlocker)
+	}
+	return remoteVideoBlocker
+}
+
+/**
+ * Destroy the video blocker, once its participant is no longer in the call.
+ *
+ * @param {RemoteVideoBlocker} remoteVideoBlocker the blocker to destroy
+ */
+export function destroyRemoteVideoBlocker(remoteVideoBlocker) {
+	remoteVideoBlocker.destroy()
+	remoteVideoBlockers.delete(remoteVideoBlocker._model)
+}

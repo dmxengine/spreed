@@ -40,6 +40,7 @@ import PollManager from './components/PollViewer/PollManager.vue'
 import RightSidebar from './components/RightSidebar/RightSidebar.vue'
 import SettingsDialog from './components/SettingsDialog/SettingsDialog.vue'
 import ConfirmDialog from './components/UIShared/ConfirmDialog.vue'
+import { useActiveCallToken, useIsBrowsingDuringCall } from './composables/useActiveCall.ts'
 import { useActiveSession } from './composables/useActiveSession.ts'
 import {
 	toggleFullscreen,
@@ -109,6 +110,8 @@ export default {
 			token: useGetToken(),
 			tokenStore: useTokenStore(),
 			isInCall: useIsInCall(),
+			activeCallToken: useActiveCallToken(),
+			isBrowsingDuringCall: useIsBrowsingDuringCall(),
 			isLeavingAfterSessionIssue: useSessionIssueHandler(),
 			isMobile: useIsMobile(),
 			isNextcloudTalkHashDirty: useHashCheck(),
@@ -123,6 +126,7 @@ export default {
 			loading: false,
 			isRefreshingCurrentConversation: false,
 			skipLeaveWarning: false,
+			isLeavingJoinedConversation: false,
 			recordingConsentGiven: false,
 			debounceRefreshCurrentConversation: () => {},
 		}
@@ -166,16 +170,7 @@ export default {
 		},
 
 		warnLeaving() {
-			return !this.isLeavingAfterSessionIssue && this.isInCall
-		},
-
-		/**
-		 * The current conversation
-		 *
-		 * @return {object} The conversation object.
-		 */
-		currentConversation() {
-			return this.$store.getters.conversation(this.token)
+			return !this.isLeavingAfterSessionIssue && (this.isInCall || !!this.activeCallToken)
 		},
 	},
 
@@ -195,6 +190,14 @@ export default {
 
 			if (watchedJoinedConversationToken && watchedJoinedConversationToken !== newValue) {
 				stopWatchingJoinedConversation()
+			}
+		},
+
+		activeCallToken(newValue, oldValue) {
+			if (!newValue && oldValue && !this.isLeavingAfterSessionIssue && !this.isLeavingJoinedConversation
+				&& this.$route.name === 'conversation' && this.token !== oldValue) {
+				// The call has ended while another conversation was opened, move the session there
+				this.joinCurrentConversationAfterCall(oldValue)
 			}
 		},
 
@@ -279,13 +282,15 @@ export default {
 
 		window.addEventListener('unload', () => {
 			console.info('Navigating away, leaving conversation')
-			if (this.token) {
+			// While in a call, the session stays in the conversation with the call, even if another one is opened
+			const joinedToken = this.activeCallToken ?? this.token
+			if (joinedToken) {
 				SessionStorage.removeItem('joined_conversation')
 				// We have to do this synchronously, because in unload and beforeunload
 				// Promises, async and await are prohibited.
 				signalingKill()
 				if (!this.isLeavingAfterSessionIssue) {
-					leaveConversationSync(this.token)
+					leaveConversationSync(joinedToken)
 				}
 			}
 		})
@@ -326,20 +331,28 @@ export default {
 				return
 			}
 
-			if (from.name === 'conversation' && from.params.token !== to.params.token) {
+			// While in a call, the session stays in the conversation with the call, even if another one was opened
+			const joinedToken = this.activeCallToken ?? (from.name === 'conversation' ? from.params.token : undefined)
+
+			if (joinedToken && joinedToken !== to.params.token) {
 				// Tear down the external call service view when leaving conversation,
 				// so iframe is not carried into the next one
-				if (hasExternalCallService(this.$store.getters.conversation(from.params.token))) {
+				if (hasExternalCallService(this.$store.getters.conversation(joinedToken))) {
 					this.callViewStore.leaveExternalCall()
 				}
 				// Await to properly close session / leave call before joining another one
-				await this.$store.dispatch('leaveConversation', { token: from.params.token })
+				this.isLeavingJoinedConversation = true
+				try {
+					await this.$store.dispatch('leaveConversation', { token: joinedToken })
+				} finally {
+					this.isLeavingJoinedConversation = false
+				}
 			}
 
 			/**
 			 * This runs whenever the new route is a conversation.
 			 */
-			if (to.name === 'conversation' && from.params.token !== to.params.token) {
+			if (to.name === 'conversation' && joinedToken !== to.params.token) {
 				// Fetch conversation object, if it's not known yet to the client
 				if (!this.$store.getters.conversation(to.params.token)) {
 					const result = await this.fetchSingleConversation(to.params.token)
@@ -380,10 +393,14 @@ export default {
 				// Block duplicated navigation
 				return
 			}
-			if (from.name === 'conversation' && to.name === 'conversation' && from.params.token === to.params.token) {
+			if (this.canBrowseDuringCall(to)) {
+				// Keep the call running in the background, the conversation is opened without joining it
+				next()
+			} else if (from.name === 'conversation' && to.name === 'conversation' && from.params.token === to.params.token
+				&& !this.isBrowsingDuringCall) {
 				// Navigating within the same conversation
 				beforeRouteChangeListener(to, from, next)
-			} else if (!this.warnLeaving || this.skipLeaveWarning || this.isVoiceRoom(from.params.token)) {
+			} else if (!this.warnLeaving || this.skipLeaveWarning || this.isVoiceRoom(this.activeCallToken ?? from.params.token)) {
 				// Safe to navigate
 				// Note: voice rooms are intended to be left without confirmation.
 				beforeRouteChangeListener(to, from, next)
@@ -391,7 +408,7 @@ export default {
 				spawnDialog(ConfirmDialog, {
 					name: t('spreed', 'Leave call'),
 					message: t('spreed', 'Navigating away from the page will leave the call in {conversation}', {
-						conversation: this.currentConversation?.displayName ?? '',
+						conversation: this.$store.getters.conversation(this.activeCallToken ?? this.token)?.displayName ?? '',
 					}),
 					buttons: [
 						{
@@ -431,7 +448,7 @@ export default {
 		},
 
 		preventUnload(event) {
-			if ((!this.warnLeaving && !this.isSendingMessages) || this.isVoiceRoom(this.token)) {
+			if ((!this.warnLeaving && !this.isSendingMessages) || this.isVoiceRoom(this.activeCallToken ?? this.token)) {
 				return
 			}
 
@@ -516,14 +533,53 @@ export default {
 			return oldConversation.objectType === CONVERSATION.OBJECT_TYPE.BREAKOUT_ROOM && newConversation.objectType === CONVERSATION.OBJECT_TYPE.BREAKOUT_ROOM
 		},
 
+		/**
+		 * Check whether the target route can be opened without leaving the active call.
+		 * While in a call, other known conversations are opened without joining them,
+		 * so the session (and the call) remains in the conversation with the call.
+		 *
+		 * @param {import('vue-router').RouteLocation} to The target route
+		 * @return {boolean}
+		 */
+		canBrowseDuringCall(to) {
+			if (!this.activeCallToken || to.name !== 'conversation'
+				// Programmatic switch of the call to another conversation (e.g. breakout rooms)
+				|| this.skipLeaveWarning || this.callViewStore.forceCallView
+				// Joining a call in another conversation requires leaving the current one
+				|| (to.hash === '#direct-call' && to.params.token !== this.activeCallToken)) {
+				return false
+			}
+
+			// External call service is rendered as an iframe in the conversation and can't be kept in the background
+			if (hasExternalCallService(this.$store.getters.conversation(this.activeCallToken))) {
+				return false
+			}
+
+			// Unknown conversations have to be joined to become a participant
+			return !!this.$store.getters.conversation(to.params.token)
+		},
+
+		/**
+		 * Move the session from the conversation with the ended call to the currently opened one
+		 *
+		 * @param {string} previousToken The token of the conversation with the ended call
+		 */
+		async joinCurrentConversationAfterCall(previousToken) {
+			const token = this.token
+			await this.$store.dispatch('leaveConversation', { token: previousToken })
+			if (this.token === token && !this.activeCallToken) {
+				await this.$store.dispatch('joinConversation', { token })
+			}
+		},
+
 		openRoot() {
-			if (this.$route.name !== 'root' && !this.isInCall) {
+			if (this.$route.name !== 'root' && !this.isInCall && !this.activeCallToken) {
 				this.$router.push({ name: 'root' })
 			}
 		},
 
-		async joinCallAutomatically(targetToken, prevToken = this.token) {
-			if (this.isInCall) {
+		async joinCallAutomatically(targetToken, prevToken = this.activeCallToken ?? this.token) {
+			if (this.isInCall || this.activeCallToken) {
 				this.callViewStore.setForceCallView(true)
 
 				const enableAudio = !BrowserStorage.getItem('audioDisabled_' + prevToken)

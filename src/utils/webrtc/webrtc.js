@@ -408,7 +408,8 @@ function usersInCallChanged(signaling, users) {
 		&& localUserInCall) {
 		console.info('Force leaving the call for current participant')
 		store.dispatch('leaveCall', {
-			token: tokenStore.token,
+			// The call might continue in the background, while another conversation is opened
+			token: tokenStore.lastJoinedConversationToken || tokenStore.token,
 			participantIdentifier: actorStore.participantIdentifier,
 		})
 

@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import RemoteVideoBlocker from './RemoteVideoBlocker.js'
+import RemoteVideoBlocker, { destroyRemoteVideoBlocker, getRemoteVideoBlocker } from './RemoteVideoBlocker.js'
 
 describe('RemoteVideoBlocker', () => {
 	let callParticipantModel
@@ -376,6 +376,60 @@ describe('RemoteVideoBlocker', () => {
 			vi.advanceTimersByTime(1000)
 
 			expect(callParticipantModel.setVideoBlocked).toHaveBeenCalledTimes(0)
+		})
+	})
+
+	describe('shared between views of the participant', () => {
+		let participantModel
+
+		beforeEach(() => {
+			// A participant without the blocker created in the outer beforeEach
+			participantModel = {
+				setVideoBlocked: vi.fn(),
+			}
+		})
+
+		test('returns the same blocker for the same participant', () => {
+			expect(getRemoteVideoBlocker(participantModel)).toBe(getRemoteVideoBlocker(participantModel))
+			expect(getRemoteVideoBlocker(participantModel)).not.toBe(getRemoteVideoBlocker({ setVideoBlocked: vi.fn() }))
+		})
+
+		test('does not block the video when it is shown in another view', () => {
+			const sharedRemoteVideoBlocker = getRemoteVideoBlocker(participantModel)
+			// Shown in the main view
+			sharedRemoteVideoBlocker.increaseVisibleCounter()
+
+			// Main view is replaced with the floating view
+			sharedRemoteVideoBlocker.decreaseVisibleCounter()
+			sharedRemoteVideoBlocker.increaseVisibleCounter()
+
+			vi.advanceTimersByTime(10000)
+
+			expect(participantModel.setVideoBlocked).toHaveBeenCalledTimes(0)
+		})
+
+		test('unblocks the video when it is shown again in another view', () => {
+			const sharedRemoteVideoBlocker = getRemoteVideoBlocker(participantModel)
+			// Not shown at all (e.g. the floating view is dismissed)
+			vi.advanceTimersByTime(5000)
+			expect(participantModel.setVideoBlocked).toHaveBeenLastCalledWith(true)
+
+			// Shown in a new view
+			getRemoteVideoBlocker(participantModel).increaseVisibleCounter()
+
+			expect(participantModel.setVideoBlocked).toHaveBeenCalledTimes(2)
+			expect(participantModel.setVideoBlocked).toHaveBeenLastCalledWith(false)
+			expect(getRemoteVideoBlocker(participantModel)).toBe(sharedRemoteVideoBlocker)
+		})
+
+		test('creates a new blocker after the previous one was destroyed', () => {
+			const sharedRemoteVideoBlocker = getRemoteVideoBlocker(participantModel)
+
+			destroyRemoteVideoBlocker(sharedRemoteVideoBlocker)
+			vi.advanceTimersByTime(5000)
+
+			expect(participantModel.setVideoBlocked).toHaveBeenCalledTimes(0)
+			expect(getRemoteVideoBlocker(participantModel)).not.toBe(sharedRemoteVideoBlocker)
 		})
 	})
 })

@@ -28,11 +28,11 @@ import IconViewGridOutline from 'vue-material-design-icons/ViewGridOutline.vue'
 import ReactionMenu from '../TopBar/ReactionMenu.vue'
 import TopBarMediaControls from '../TopBar/TopBarMediaControls.vue'
 import CallEndLeaveButton from './CallEndLeaveButton.vue'
+import { useCallViewToken } from '../../composables/useCallViewToken.ts'
 import {
 	toggleFullscreen,
 	useDocumentFullscreen,
 } from '../../composables/useDocumentFullscreen.ts'
-import { useGetToken } from '../../composables/useGetToken.ts'
 import { ATTENDEE, CONVERSATION } from '../../constants.ts'
 import {
 	getTalkConfig,
@@ -50,7 +50,7 @@ const { isSidebar = false } = defineProps<{
 }>()
 
 const store = useStore()
-const token = useGetToken()
+const token = useCallViewToken()
 const actorStore = useActorStore()
 const isFullscreen = !isSidebar && useDocumentFullscreen()
 const callViewStore = useCallViewStore()

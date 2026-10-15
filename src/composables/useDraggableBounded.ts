@@ -58,5 +58,5 @@ export function useDraggableBounded(
 	// container queries) is up to date before we read its rect.
 	watch([containerWidth, containerHeight], clampToBounds, { flush: 'post' })
 
-	return { isDragging, style }
+	return { isDragging, style, position }
 }

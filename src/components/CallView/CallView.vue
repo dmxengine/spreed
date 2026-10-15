@@ -147,18 +147,30 @@
 					:callParticipantModels="callParticipantModels" />
 
 				<!-- Local video if sidebar -->
-				<LocalVideo
+				<div
 					v-if="isSidebar && !showLocalVideo"
-					ref="localVideo"
-					class="local-video"
-					:class="{ 'local-video--sidebar': isSidebar }"
-					:fitVideo="true"
-					:isStripe="true"
-					:token="token"
-					:localMediaModel="localMediaModel"
-					:localCallParticipantModel="localCallParticipantModel"
-					:isSidebar="isSidebar"
-					@clickVideo="handleClickLocalVideo" />
+					class="local-video local-video--sidebar"
+					:class="{ 'local-video--collapsed': !isSidebarLocalVideoOpen }">
+					<LocalVideo
+						v-if="isSidebarLocalVideoOpen"
+						ref="localVideo"
+						:fitVideo="true"
+						:isStripe="true"
+						:token="token"
+						:localMediaModel="localMediaModel"
+						:localCallParticipantModel="localCallParticipantModel"
+						:isSidebar="isSidebar"
+						@clickVideo="handleClickLocalVideo" />
+					<!-- Same control as for the participant bar in the main call view -->
+					<StripeControls
+						class="local-video__toggle"
+						:currentPage="0"
+						:numberOfPages="1"
+						:hasPreviousPage="false"
+						:hasNextPage="false"
+						:isOpen="isSidebarLocalVideoOpen"
+						@toggle="toggleSidebarLocalVideo" />
+				</div>
 			</div>
 
 			<BottomBar v-if="!isRecording" :isSidebar="isSidebar" />
@@ -175,6 +187,7 @@ import debounce from 'debounce'
 import { computed, provide, ref } from 'vue'
 import BottomBar from './BottomBar.vue'
 import SpeakersGrid from './Grid/SpeakersGrid.vue'
+import StripeControls from './Grid/StripeControls.vue'
 import VideosGrid from './Grid/VideosGrid.vue'
 import EmptyCallView from './shared/EmptyCallView.vue'
 import LiveTranscriptionRenderer from './shared/LiveTranscriptionRenderer.vue'
@@ -185,7 +198,9 @@ import ScreenShare from './shared/ScreenShare.vue'
 import VideoBottomBar from './shared/VideoBottomBar.vue'
 import VideoVue from './shared/VideoVue.vue'
 import ViewerOverlayCallView from './shared/ViewerOverlayCallView.vue'
+import { provideCallViewToken } from '../../composables/useCallViewToken.ts'
 import { SIMULCAST } from '../../constants.ts'
+import BrowserStorage from '../../services/BrowserStorage.js'
 import { fetchPeers } from '../../services/callsService.ts'
 import { getTalkConfig } from '../../services/CapabilitiesManager.ts'
 import { EventBus } from '../../services/EventBus.ts'
@@ -193,7 +208,7 @@ import { useCallViewStore } from '../../stores/callView.ts'
 import { useParticipantActivityStore } from '../../stores/participantActivity.ts'
 import { useSettingsStore } from '../../stores/settings.ts'
 import { callParticipantCollection, localCallParticipantModel, localMediaModel } from '../../utils/webrtc/index.js'
-import RemoteVideoBlocker from '../../utils/webrtc/RemoteVideoBlocker.js'
+import { destroyRemoteVideoBlocker, getRemoteVideoBlocker } from '../../utils/webrtc/RemoteVideoBlocker.js'
 import { placeholderImage, placeholderModel, placeholderName, placeholderSharedData } from './Grid/gridPlaceholders.ts'
 import { animateTilePromotion } from './Grid/tilePromotionTransition.ts'
 import { setUpSpeakerSimulation, tearDownSpeakerSimulation } from './speakerSimulation.ts'
@@ -201,6 +216,10 @@ import { useActiveSpeakers } from './useActiveSpeakers.ts'
 import { useWakeLock } from './useWakeLock.ts'
 
 const serverVersion = loadState('core', 'config', {}).version ?? '29.0.0.0'
+
+// CallView is re-mounted during the call when switching between the main and the floating view,
+// the default media state should only be applied once per call
+let defaultMediaStateAppliedToken = null
 
 export default {
 	name: 'CallView',
@@ -215,6 +234,7 @@ export default {
 		ReactionToaster,
 		ScreenShare,
 		SpeakersGrid,
+		StripeControls,
 		VideoBottomBar,
 		VideoVue,
 		ViewerOverlayCallView,
@@ -250,10 +270,13 @@ export default {
 		provide('CallView:screenshotModeEnabled', screenshotMode)
 		const settingsStore = useSettingsStore()
 		// If media settings was not used, we check the global config of default devices state here
-		if (!settingsStore.showMediaSettings && settingsStore.startWithoutMedia) {
+		if (!settingsStore.showMediaSettings && settingsStore.startWithoutMedia && defaultMediaStateAppliedToken !== props.token) {
 			localMediaModel.disableAudio()
 			localMediaModel.disableVideo()
 		}
+		defaultMediaStateAppliedToken = props.token
+
+		provideCallViewToken(() => props.token)
 
 		const participantActivityStore = useParticipantActivityStore()
 		const callViewStore = useCallViewStore()
@@ -300,6 +323,8 @@ export default {
 			},
 
 			showPresenterOverlay: true,
+			// Remembered, as the call view is re-mounted when switching between the main and the floating view
+			isSidebarLocalVideoOpen: BrowserStorage.getItem('sidebarLocalVideoCollapsed') !== 'true',
 			debounceFetchPeers: () => {},
 			forcePromotedModel: null,
 			// Videos controls and name
@@ -686,6 +711,10 @@ export default {
 			tearDownSpeakerSimulation()
 		}
 
+		if (!this.$store?.getters.isInCall(this.token)) {
+			defaultMediaStateAppliedToken = null
+		}
+
 		this.debounceFetchPeers.clear?.()
 		this.debounceHandleMovement.clear?.()
 		this.callViewStore.setIsEmptyCallView(true)
@@ -703,6 +732,16 @@ export default {
 
 	methods: {
 		t,
+
+		toggleSidebarLocalVideo() {
+			this.isSidebarLocalVideoOpen = !this.isSidebarLocalVideoOpen
+			if (this.isSidebarLocalVideoOpen) {
+				BrowserStorage.removeItem('sidebarLocalVideoCollapsed')
+			} else {
+				BrowserStorage.setItem('sidebarLocalVideoCollapsed', 'true')
+			}
+		},
+
 		// Placeholder data for devMode and screenshotMode
 		placeholderImage,
 		placeholderName,
@@ -723,7 +762,7 @@ export default {
 			const removedModelIds = Object.keys(this.sharedDatas).filter((sharedDataId) => models.find((model) => model.attributes.peerId === sharedDataId) === undefined)
 
 			removedModelIds.forEach((removedModelId) => {
-				this.sharedDatas[removedModelId].remoteVideoBlocker.destroy()
+				destroyRemoteVideoBlocker(this.sharedDatas[removedModelId].remoteVideoBlocker)
 
 				delete this.sharedDatas[removedModelId]
 
@@ -748,7 +787,7 @@ export default {
 			addedModels.forEach((addedModel) => {
 				const sharedData = {
 					promoted: false,
-					remoteVideoBlocker: new RemoteVideoBlocker(addedModel),
+					remoteVideoBlocker: getRemoteVideoBlocker(addedModel),
 					screenVisible: false,
 				}
 
@@ -1119,6 +1158,18 @@ export default {
 		max-height: 100px;
 		bottom: var(--bottom-bar-height);
 		margin: var(--default-grid-baseline);
+	}
+}
+
+.local-video__toggle {
+	position: absolute;
+	top: 0;
+	inset-inline-end: var(--default-grid-baseline);
+	z-index: 1;
+
+	// Without the video, the toggle takes its place
+	.local-video--collapsed & {
+		position: static;
 	}
 }
 

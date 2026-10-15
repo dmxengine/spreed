@@ -18,7 +18,7 @@ import IconArrowLeft from 'vue-material-design-icons/ArrowLeft.vue'
 import IconChevronUp from 'vue-material-design-icons/ChevronUp.vue'
 import IconPhoneHangupOutline from 'vue-material-design-icons/PhoneHangupOutline.vue'
 import IconPhoneOffOutline from 'vue-material-design-icons/PhoneOffOutline.vue'
-import { useGetToken } from '../../composables/useGetToken.ts'
+import { useCallViewToken } from '../../composables/useCallViewToken.ts'
 import { CONVERSATION, PARTICIPANT } from '../../constants.ts'
 import { EventBus } from '../../services/EventBus.ts'
 import { useActorStore } from '../../stores/actor.ts'
@@ -47,7 +47,7 @@ const callViewStore = useCallViewStore()
 const router = useRouter()
 const vuexStore = useStore()
 
-const token = useGetToken()
+const token = useCallViewToken()
 const isMobile = useIsMobile()
 
 const loading = ref(false)
@@ -78,7 +78,8 @@ async function leaveCall(endMeetingForAll = false) {
 		console.info('Leaving call')
 	}
 
-	if (isVoiceRoom.value) {
+	// When another conversation is opened during the call, it should stay opened
+	if (isVoiceRoom.value && router.currentRoute.value.params.token === token.value) {
 		router.push({ name: 'root' })
 		// Call ending is handled in App.vue
 		return
